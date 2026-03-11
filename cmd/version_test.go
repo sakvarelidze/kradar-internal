@@ -20,24 +20,48 @@ func TestWithBuildInfoDefaults_UsesSemverLikeVersionAndShortCommit(t *testing.T)
 	}
 }
 
-func TestWithBuildInfoDefaults_UsesMainModuleSemverVersion(t *testing.T) {
-	version, _, _ := withBuildInfoDefaults("dev", "none", "unknown", map[string]string{
-		"main.version": "v1.2.3",
-	})
-
+func TestSemverLikeVersion_UsesMainModuleSemverVersion(t *testing.T) {
+	version := semverLikeVersion(map[string]string{"main.version": "v1.2.3"}, nil)
 	if version != "1.2.3" {
 		t.Fatalf("expected semver version from main module, got %q", version)
 	}
 }
 
-func TestWithBuildInfoDefaults_AppendsDirtyBuildMetadata(t *testing.T) {
-	version, _, _ := withBuildInfoDefaults("dev", "none", "unknown", map[string]string{
-		"main.version": "(devel)",
+func TestSemverLikeVersion_UsesTagWhenMainVersionIsPseudo(t *testing.T) {
+	version := semverLikeVersion(map[string]string{
+		"main.version": "v0.0.0-20260311131407-8d22d158cb56",
+		"vcs.revision": "8d22d158cb56",
 		"vcs.modified": "true",
+	}, func(_ string) (string, bool) {
+		return "1.4.2", true
 	})
 
-	if version != "0.0.0-dev+dirty" {
-		t.Fatalf("expected dirty build metadata in version, got %q", version)
+	if version != "1.4.2+dirty" {
+		t.Fatalf("expected release tag version with dirty metadata, got %q", version)
+	}
+}
+
+func TestSemverLikeVersion_FallsBackToDevWhenTagUnavailable(t *testing.T) {
+	version := semverLikeVersion(map[string]string{
+		"main.version": "v0.0.0-20260311131407-8d22d158cb56",
+	}, func(_ string) (string, bool) {
+		return "", false
+	})
+
+	if version != "0.0.0-dev" {
+		t.Fatalf("expected dev fallback, got %q", version)
+	}
+}
+
+func TestSemverLikeVersion_TreatsPseudoVersionWithBuildMetadataAsPseudo(t *testing.T) {
+	version := semverLikeVersion(map[string]string{
+		"main.version": "v0.0.0-20260311131407-8d22d158cb56+dirty",
+	}, func(_ string) (string, bool) {
+		return "", false
+	})
+
+	if version != "0.0.0-dev" {
+		t.Fatalf("expected dev fallback for pseudo-version with metadata, got %q", version)
 	}
 }
 

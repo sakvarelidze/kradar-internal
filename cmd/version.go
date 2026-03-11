@@ -3,6 +3,8 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"regexp"
 	"runtime/debug"
 	"strings"
 
@@ -14,6 +16,8 @@ var (
 	Version = "dev"
 	Commit  = "none"
 	Date    = "unknown"
+
+	goPseudoVersionPattern = regexp.MustCompile(`^v?0\.0\.0-\d{14}-[0-9a-f]{12}(\+.*)?$`)
 )
 
 func init() {
@@ -42,7 +46,7 @@ func withBuildInfoDefaults(version, commit, date string, settings map[string]str
 	}
 
 	if version == "dev" {
-		version = semverLikeVersion(settings)
+		version = semverLikeVersion(settings, latestSemverTagForRevision)
 	}
 
 	if commit == "none" {
@@ -60,18 +64,66 @@ func withBuildInfoDefaults(version, commit, date string, settings map[string]str
 	return version, commit, date
 }
 
-func semverLikeVersion(settings map[string]string) string {
+func semverLikeVersion(settings map[string]string, tagLookup func(string) (string, bool)) string {
 	if mv := strings.TrimSpace(settings["main.version"]); mv != "" && mv != "(devel)" {
 		if v, err := semver.NewVersion(strings.TrimPrefix(mv, "v")); err == nil {
-			return v.String()
+			if !isGoPseudoVersion(mv) {
+				return withDirtySuffix(v.String(), settings)
+			}
 		}
 	}
 
-	version := "0.0.0-dev"
-	if settings["vcs.modified"] == "true" {
-		version += "+dirty"
+	if tagLookup != nil {
+		if tag, ok := tagLookup(settings["vcs.revision"]); ok {
+			return withDirtySuffix(tag, settings)
+		}
 	}
-	return version
+
+	return withDirtySuffix("0.0.0-dev", settings)
+}
+
+func latestSemverTagForRevision(revision string) (string, bool) {
+	revision = strings.TrimSpace(revision)
+	if revision == "" {
+		return "", false
+	}
+
+	out, err := exec.Command("git", "tag", "--points-at", revision).Output()
+	if err != nil {
+		return "", false
+	}
+
+	lines := strings.Split(string(out), "\n")
+	var best *semver.Version
+	for _, line := range lines {
+		tag := strings.TrimSpace(line)
+		if tag == "" {
+			continue
+		}
+		v, err := semver.NewVersion(strings.TrimPrefix(tag, "v"))
+		if err != nil {
+			continue
+		}
+		if best == nil || v.GreaterThan(best) {
+			best = v
+		}
+	}
+
+	if best == nil {
+		return "", false
+	}
+	return best.String(), true
+}
+
+func isGoPseudoVersion(v string) bool {
+	return goPseudoVersionPattern.MatchString(strings.TrimSpace(v))
+}
+
+func withDirtySuffix(version string, settings map[string]string) string {
+	if settings["vcs.modified"] != "true" || strings.Contains(version, "+") {
+		return version
+	}
+	return version + "+dirty"
 }
 
 func shortSHA(revision string) string {
