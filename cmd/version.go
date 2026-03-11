@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"runtime/debug"
+	"strings"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/spf13/cobra"
 )
 
@@ -25,10 +27,11 @@ func readBuildSettings() map[string]string {
 		return nil
 	}
 
-	settings := make(map[string]string, len(info.Settings))
+	settings := make(map[string]string, len(info.Settings)+1)
 	for _, setting := range info.Settings {
 		settings[setting.Key] = setting.Value
 	}
+	settings["main.version"] = info.Main.Version
 
 	return settings
 }
@@ -39,18 +42,12 @@ func withBuildInfoDefaults(version, commit, date string, settings map[string]str
 	}
 
 	if version == "dev" {
-		if vcsModified := settings["vcs.modified"]; vcsModified == "true" {
-			if vcsRevision := settings["vcs.revision"]; vcsRevision != "" {
-				version = vcsRevision + "-dirty"
-			}
-		} else if vcsRevision := settings["vcs.revision"]; vcsRevision != "" {
-			version = vcsRevision
-		}
+		version = semverLikeVersion(settings)
 	}
 
 	if commit == "none" {
 		if vcsRevision := settings["vcs.revision"]; vcsRevision != "" {
-			commit = vcsRevision
+			commit = shortSHA(vcsRevision)
 		}
 	}
 
@@ -61,6 +58,28 @@ func withBuildInfoDefaults(version, commit, date string, settings map[string]str
 	}
 
 	return version, commit, date
+}
+
+func semverLikeVersion(settings map[string]string) string {
+	if mv := strings.TrimSpace(settings["main.version"]); mv != "" && mv != "(devel)" {
+		if v, err := semver.NewVersion(strings.TrimPrefix(mv, "v")); err == nil {
+			return v.String()
+		}
+	}
+
+	version := "0.0.0-dev"
+	if settings["vcs.modified"] == "true" {
+		version += "+dirty"
+	}
+	return version
+}
+
+func shortSHA(revision string) string {
+	revision = strings.TrimSpace(revision)
+	if len(revision) <= 7 {
+		return revision
+	}
+	return revision[:7]
 }
 
 var versionCmd = &cobra.Command{
